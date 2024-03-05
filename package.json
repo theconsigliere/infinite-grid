@@ -1,0 +1,17 @@
+{
+  "type": "module",
+  "scripts": {
+    "install": "yarn install",
+    "dev": "vite",
+    "prod": "rm -r node_modules/"
+  },
+  "dependencies": {
+    "gsap": "^3.12.5",
+    "lil-gui": "^0.19.2",
+    "normalize-wheel": "^1.0.1",
+    "three": "^0.162.0",
+    "virtual-scroll": "^2.2.1",
+    "vite": "^5.1.4",
+    "vite-plugin-glsl": "^1.2.1"
+  }
+}
