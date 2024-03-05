@@ -6,9 +6,6 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js"
 import gui from "lil-gui"
 import normalizeWheel from "normalize-wheel"
 
-let ww = window.innerWidth
-let wh = window.innerHeight
-
 const isFirefox = navigator.userAgent.indexOf("Firefox") > -1
 const isWindows = navigator.appVersion.indexOf("Win") != -1
 
@@ -20,6 +17,8 @@ const multipliers = {
   firefox: isWindows ? firefoxMultiplier * 2 : firefoxMultiplier,
 }
 
+console.log(multipliers)
+
 /** CORE **/
 class Sketch {
   constructor(options) {
@@ -28,25 +27,19 @@ class Sketch {
     this.width = window.innerWidth
     this.height = window.innerHeight
 
+    // scene coordinates
     this.tx = 0
     this.ty = 0
     this.cx = 0
     this.cy = 0
-
     this.diff = 0
 
-    this.wheel = { x: 0, y: 0 }
     this.on = { x: 0, y: 0 }
     this.max = { x: 0, y: 0 }
-
     this.isDragging = false
-
     this.tl = gsap.timeline({ paused: true })
 
-    this.el = document.querySelector(".js-grid")
-
     // Camera
-
     this.frustumSize = this.width
     this.aspect = this.width / this.height
 
@@ -62,12 +55,14 @@ class Sketch {
     this.camera.position.set(0, 0, 2)
     this.camera.lookAt(0, 0, 0)
 
+    this.time = 0
+    this.isPlaying = true
+
     this.renderer = new THREE.WebGLRenderer({ antialias: true })
     this.renderer.setPixelRatio(window.devicePixelRatio)
     this.renderer.setSize(this.width, this.height)
     this.renderer.setClearColor(0x000000, 1)
     this.renderer.outputColorSpace = THREE.SRGBColorSpace
-
     this.textureLoader = new THREE.TextureLoader()
 
     document.body.appendChild(this.renderer.domElement)
@@ -75,7 +70,16 @@ class Sketch {
 
     this.controls = new OrbitControls(this.camera, this.renderer.domElement)
 
-    this.addPlanes()
+    // DOM
+    this.DOM = {
+      grid: (this.el = document.querySelector(".js-grid")),
+      planes: [...document.querySelectorAll(".js-plane")],
+    }
+
+    this.planesObjects = []
+
+    this.addObjects()
+    this.render()
     this.addEvents()
     this.settings()
     this.resize()
@@ -104,32 +108,13 @@ class Sketch {
       })
   }
 
-  addEvents() {
-    gsap.ticker.add(this.tick)
+  render() {
+    if (!this.isPlaying) return
 
-    window.addEventListener("mousemove", this.onMouseMove)
-    window.addEventListener("mousedown", this.onMouseDown)
-    window.addEventListener("mouseup", this.onMouseUp)
-    window.addEventListener("wheel", this.onWheel)
-  }
+    this.time += 0.05
 
-  addPlanes() {
-    const planes = [...document.querySelectorAll(".js-plane")]
-
-    this.planes = planes.map((el, i) => {
-      const plane = new Plane()
-
-      plane.init(el, i)
-
-      this.scene.add(plane)
-
-      return plane
-    })
-  }
-
-  tick = () => {
-    const xDiff = this.tx - this.cx
-    const yDiff = this.ty - this.cy
+    let xDiff = this.tx - this.cx
+    let yDiff = this.ty - this.cy
 
     this.cx += xDiff * 0.085
     this.cx = Math.round(this.cx * 100) / 100
@@ -139,12 +124,93 @@ class Sketch {
 
     this.diff = Math.max(Math.abs(yDiff * 0.0001), Math.abs(xDiff * 0.0001))
 
-    this.planes.length &&
-      this.planes.forEach((plane) =>
-        plane.update(this.cx, this.cy, this.max, this.diff)
-      )
+    this.planesObjects.length &&
+      this.planesObjects.forEach((plane) => {
+        plane.mesh.material.uniforms.uDiff.value = this.diff
 
+        // add all the stuff
+        this.x =
+          gsap.utils.wrap(
+            -(this.max.x - plane.rect.right),
+            plane.rect.right,
+            this.cx
+          ) - plane.xOffset
+
+        this.y =
+          gsap.utils.wrap(
+            -(this.max.y - plane.rect.bottom),
+            plane.rect.bottom,
+            this.cy * plane.my
+          ) - plane.yOffset
+
+        plane.mesh.position.x = this.x
+        plane.mesh.position.y = this.y
+      })
+
+    requestAnimationFrame(this.render.bind(this))
     this.renderer.render(this.scene, this.camera)
+  }
+
+  addEvents() {
+    // gsap.ticker.add(this.tick)
+    window.addEventListener("mousemove", this.onMouseMove)
+    window.addEventListener("mousedown", this.onMouseDown)
+    window.addEventListener("mouseup", this.onMouseUp)
+    window.addEventListener("wheel", this.onWheel)
+  }
+
+  addObjects() {
+    this.geometry = new THREE.PlaneGeometry(1, 1, 1, 1)
+    this.material = new THREE.ShaderMaterial({
+      side: THREE.DoubleSide,
+      uniforms: {
+        uTexture: { value: null },
+        uResolution: { value: new THREE.Vector2(1, 1) },
+        uSize: { value: new THREE.Vector2(1, 1) },
+        uDiff: { value: 0 },
+      },
+      // wireframe: true,
+      vertexShader: vertex,
+      fragmentShader: fragment,
+    })
+
+    this.DOM.planes.forEach((el, i) => {
+      let material = this.material.clone()
+      let rect = el.getBoundingClientRect()
+
+      let rectObject = {
+        width: rect.width,
+        height: rect.height,
+        left: rect.left,
+        top: rect.top,
+        right: rect.right,
+        bottom: rect.bottom,
+      }
+
+      material.uniforms.uTexture.value = this.textureLoader.load(el.dataset.src)
+      material.uniforms.uTexture.value.minFilter = THREE.LinearFilter
+      material.uniforms.uTexture.value.generateMipmaps = false
+      material.uniforms.uSize.value.x = rect.width
+      material.uniforms.uSize.value.y = rect.height
+      material.uniforms.uResolution.value.x = rect.width
+      material.uniforms.uResolution.value.y = rect.height
+
+      let mesh = new THREE.Mesh(this.geometry, material)
+      mesh.scale.set(rect.width, rect.height, 1)
+
+      this.planesObjects[i] = {
+        el: el,
+        x: 0,
+        y: 0,
+        my: 1 - (i % 5) * 0.1,
+        mesh: mesh,
+        rect: rectObject,
+        xOffset: rect.left + rect.width / 2 - this.width / 2,
+        yOffset: rect.top + rect.height / 2 - this.height / 2,
+      }
+
+      this.scene.add(mesh)
+    })
   }
 
   onMouseMove = ({ clientX, clientY }) => {
@@ -172,120 +238,18 @@ class Sketch {
   onWheel = (e) => {
     let normalized = normalizeWheel(e)
 
-    // console.log(normalized)
-
-    // this.tx -= normalized.pixelX * this.wheel.x
-    // this.ty += normalized.pixelY * this.wheel.y
-
-    const { mouse, firefox } = multipliers
-
-    this.wheel.x = e.wheelDeltaX || e.deltaX * -1
-    this.wheel.y = e.wheelDeltaY || e.deltaY * -1
-
-    if (isFirefox && e.deltaMode === 1) {
-      this.wheel.x *= firefox
-      this.wheel.y *= firefox
-    }
-
-    this.wheel.y *= mouse
-    this.wheel.x *= mouse
-
-    this.tx += this.wheel.x
-    this.ty -= this.wheel.y
+    this.tx += -normalized.pixelX
+    this.ty -= -normalized.pixelY
   }
 
   resize = () => {
-    ww = window.innerHeight
-    wh = window.innerWidth
+    this.width = window.innerWidth
+    this.height = window.innerHeight
 
-    const { bottom, right } = this.el.getBoundingClientRect()
+    const { bottom, right } = this.DOM.grid.getBoundingClientRect()
 
     this.max.x = right
     this.max.y = bottom
-  }
-}
-
-const loader = new THREE.TextureLoader()
-
-const geometry = new THREE.PlaneGeometry(1, 1, 1, 1)
-const material = new THREE.ShaderMaterial({
-  side: THREE.DoubleSide,
-  uniforms: {
-    uTexture: { value: null },
-    uResolution: { value: new THREE.Vector2(0.6, 0.9) },
-    uSize: { value: new THREE.Vector2(1, 1) },
-    uDiff: { value: 0 },
-  },
-  vertexShader: vertex,
-  fragmentShader: fragment,
-})
-
-class Plane extends THREE.Object3D {
-  init(el, i) {
-    this.el = el
-
-    this.x = 0
-    this.y = 0
-
-    this.my = 1 - (i % 5) * 0.1
-
-    this.geometry = geometry
-    this.material = material.clone()
-
-    this.texture = loader.load(this.el.dataset.src, (texture) => {
-      texture.minFilter = THREE.LinearFilter
-      texture.generateMipmaps = false
-
-      const { naturalWidth, naturalHeight } = texture.image
-      const { uSize, uTexture } = this.material.uniforms
-
-      uTexture.value = texture
-
-      uSize.value.x = naturalWidth
-      uSize.value.y = naturalHeight
-    })
-
-    this.mesh = new THREE.Mesh(this.geometry, this.material)
-    this.add(this.mesh)
-
-    this.resize()
-  }
-
-  update = (x, y, max, diff) => {
-    const { right, bottom } = this.rect
-    const { uDiff } = this.material.uniforms
-
-    this.y =
-      gsap.utils.wrap(-(max.y - bottom), bottom, y * this.my) - this.yOffset
-
-    this.x = gsap.utils.wrap(-(max.x - right), right, x) - this.xOffset
-
-    uDiff.value = diff
-
-    this.position.x = this.x
-    this.position.y = this.y
-  }
-
-  resize() {
-    this.rect = this.el.getBoundingClientRect()
-
-    const { left, top, width, height } = this.rect
-    const { uResolution, uToRes, uPos, uOffset } = this.material.uniforms
-
-    this.xOffset = left + width / 2 - ww / 2
-    this.yOffset = top + height / 2 - wh / 2
-
-    this.position.x = this.xOffset
-    this.position.y = this.yOffset
-
-    uResolution.value.x = width
-    uResolution.value.y = height
-
-    this.mesh.scale.set(width, height, 1)
-  }
-
-  lerp(start, end, amount) {
-    return start * (1 - amount) + end * amount
   }
 }
 
